@@ -604,26 +604,42 @@ def _sphere_diameter(args):
     return getattr(args, 'particle_diameter', None)
 
 
-def _fix_tomo_names(star_path):
+def _fix_tomo_names(star_path, ts_name):
     """
-    Strip the AreTomo3 volume suffix (_Vol and anything after) from rlnTomoName
-    in a pytom-extracted particles STAR file, in place.
+    Overwrite rlnTomoName in a pytom-extracted particles STAR file with the
+    known-correct bare TS name (e.g. "ts-144"), in place.
 
-    pytom uses the volume filename stem (ts-144_Vol.mrc → ts-144_Vol) as the
-    tomo_id, but RELION expects just ts-144.  RELION cannot match particles to
-    tomograms when the names differ.
+    pytom writes the volume filename stem as tomo_id/rlnTomoName -- e.g.
+    "ts-144_Vol", or, via pytom_ribo_auto.py's tomogram-resampling step
+    (_stage_resampled_tomograms, _RESAMPLED_SUFFIX = '_resampled'),
+    "ts-034_resampled_Vol" -- but RELION expects the bare TS name and
+    cannot match particles to tomograms when the names differ.
+
+    A prior version of this function tried to regex-strip a known suffix
+    pattern (anchored on a literal "_Vol") out of that stem -- which
+    silently failed on the resampled case above (the infix comes BEFORE
+    _Vol, so the anchor never matched at all), confirmed as the real cause
+    of a RELION5 Import-coordinates mismatch against parry's real data,
+    2026-08-24. Guessing the suffix pytom happened to use is inherently
+    fragile -- any future naming variant (a different resample suffix, a
+    denoise step, etc.) would silently break the same way again. Every row
+    in a single per-TS particles.star already shares one tomo name (one
+    extraction job = one TS) and the caller already has the ground-truth
+    name (the same `prefix`/`ts_name` used to build the job in the first
+    place) -- so just overwrite the column with it directly instead of
+    trying to derive it from file content.
     """
-    import re as _re
-    path = Path(star_path)
-    text = path.read_text()
-    # Strip _Vol and any trailing suffix (e.g. _Vol_b2) from tomo name tokens.
-    # pytom writes the volume stem (ts-144_Vol.mrc → ts-144_Vol) as rlnTomoName;
-    # RELION expects the bare TS name (ts-144).
-    fixed = _re.sub(r'(ts-\d+)_Vol\S*', r'\1', text)
-    if fixed != text:
-        path.write_text(fixed)
-        return True
-    return False
+    import starfile
+    data = starfile.read(star_path)
+    df = data['particles'] if isinstance(data, dict) else data
+    if 'rlnTomoName' not in df.columns:
+        return False
+    if (df['rlnTomoName'] == ts_name).all():
+        return False
+    df['rlnTomoName'] = ts_name
+    starfile.write({'particles': df} if isinstance(data, dict) else df,
+                    star_path, overwrite=True)
+    return True
 
 
 def _build_extract_cmd(extract_bin, job_json, args, cut_off_override=None):
@@ -884,10 +900,12 @@ def run(args):
                         if eret.returncode != 0:
                             print(f'  WARNING: extraction exited with code {eret.returncode}')
                         else:
-                            # Strip _Vol suffix so rlnTomoName matches RELION tomogram set
+                            # rlnTomoName must match the bare TS name used by
+                            # the RELION tomogram set, not pytom's own volume
+                            # filename stem -- see _fix_tomo_names docstring.
                             for star in sorted(out_subdir.glob('*_particles.star')):
-                                if _fix_tomo_names(star):
-                                    print(f'  Fixed rlnTomoName (_Vol stripped): {star.name}')
+                                if _fix_tomo_names(star, prefix):
+                                    print(f'  Fixed rlnTomoName -> {prefix}: {star.name}')
                             if args.imod:
                                 mod_dir = (Path(args.imod_dir).resolve()
                                            if args.imod_dir else out_dir / 'mod')
@@ -1304,10 +1322,12 @@ def _run_extract_only(args, out_dir, sep):
 
         ok.append(ts_name)
 
-        # Strip _Vol suffix from rlnTomoName so names match the RELION tomogram set
+        # rlnTomoName must match the bare TS name used by the RELION
+        # tomogram set, not pytom's own volume filename stem -- see
+        # _fix_tomo_names docstring.
         for star in sorted(job_json.parent.glob('*_particles.star')):
-            if _fix_tomo_names(star):
-                print(f'  Fixed rlnTomoName (_Vol suffix stripped): {star.name}')
+            if _fix_tomo_names(star, ts_name):
+                print(f'  Fixed rlnTomoName -> {ts_name}: {star.name}')
 
         if args.imod:
             star_files = sorted(job_json.parent.glob('*_particles.star'))
