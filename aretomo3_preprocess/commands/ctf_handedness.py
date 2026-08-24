@@ -809,8 +809,17 @@ def run(args):
 
     jobs = []
     for ts_name, _ in selected:
-        st_path = Path(cmd0_dir) / f'{ts_name}.mrc'
-        imod_ts_dir = aln_dir / f'{ts_name}_Imod'
+        # Resolved to absolute here, at build time (cwd is still wherever the
+        # user invoked the command from) -- ctfplotter/newstack are run with
+        # cwd=work_dir (the per-TS output subdirectory, so -defFn/-save
+        # outputs land there), so a relative st/tlt/xf path would silently
+        # fail to open once the subprocess cwd changes. Confirmed as the
+        # actual cause of a real "ERROR: ctfplotter - Opening tilt angle
+        # file ..." failure (which then cascades into a confusing Qt/
+        # offscreen abort, since ctfplotter's own GUI-error-reporting path
+        # is what crashes -- not a real Qt/env problem, see imod_env()).
+        st_path = (Path(cmd0_dir) / f'{ts_name}.mrc').resolve()
+        imod_ts_dir = (aln_dir / f'{ts_name}_Imod').resolve()
         xf_path = imod_ts_dir / f'{ts_name}_st.xf'
         tlt_path = imod_ts_dir / f'{ts_name}_st.tlt'
         # AlphaOffset read from THIS run's own .aln (not alignment_data.json,
