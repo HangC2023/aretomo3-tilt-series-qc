@@ -36,10 +36,10 @@ _KIND_LABEL = {
 _KIND_FILES = {
     'gain_check':     [('Report', 'report.html')],
     'aretomo_analyse': [('Report', 'index.html')],
-    'pytom_match':     [('Match QC (raw score map)', 'pytom_match_qc.html'),
-                        ('Picks (interactive)',      'pytom_extract_qc_dev.html')],
-    'gapstop_match':   [('Match QC (raw score map)', 'gapstop_match_qc.html'),
-                        ('Picks (interactive)',      'gapstop_extract_qc_dev.html')],
+    'pytom_match':     [('Picks (interactive)',      'pytom_extract_qc_dev.html'),
+                        ('Match QC (raw score map)', 'pytom_match_qc.html')],
+    'gapstop_match':   [('Picks (interactive)',      'gapstop_extract_qc_dev.html'),
+                        ('Match QC (raw score map)', 'gapstop_match_qc.html')],
     'ctf_handedness':  [('Report', 'index.html')],
 }
 

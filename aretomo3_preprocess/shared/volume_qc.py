@@ -736,7 +736,10 @@ def make_picks_html_dev(
         if pd and pd.get('img_b64'):
             s_min   = pd['score_min']
             s_max   = pd['score_max']
-            s_init  = s_max
+            # Start at the lowest threshold so every extracted particle is
+            # visible immediately on load -- the slider is for narrowing
+            # down from "everything", not building up from "nothing".
+            s_init  = s_min
             s_step  = round((s_max - s_min) / 1000, 6) or 0.0001
             img_nx  = pd['img_nx']
             img_ny  = pd['img_ny']
@@ -909,8 +912,8 @@ function downloadCSV() {{
 
 function resetAll() {{
   document.querySelectorAll('.ts-slider').forEach(function(sl) {{
-    var min=parseFloat(sl.min), max=parseFloat(sl.max);
-    sl.value = max;
+    var min=parseFloat(sl.min);
+    sl.value = min;
     var tid = sl.id.replace('sl_','');
     onSliderInput(tid, sl.dataset.ts, parseFloat(sl.value));
   }});
@@ -945,7 +948,7 @@ function openFullscreen(tid, ts) {{
   var D = window._pd && window._pd[tid];
   if (!D) return;
   var sl = document.getElementById('sl_'+tid);
-  var curVal = sl ? parseFloat(sl.value) : D.smax;
+  var curVal = sl ? parseFloat(sl.value) : D.smin;
   var bgEl = document.getElementById('bg_'+tid);
   var imgSrc = bgEl ? bgEl.src : '';
   var smin = D.smin, smax = D.smax;
