@@ -232,8 +232,28 @@ _PARTICLES = {
             'diameter_a': 220.0, 'target_apix': _DEFAULT_TARGET_APIX},
     '30S': {'map': _REF_DIR / 'map-30S.mrc', 'mask': _REF_DIR / 'mask-30S.mrc',
             'diameter_a': 200.0, 'target_apix': _DEFAULT_TARGET_APIX},
-    '80S': {'map': _REF_DIR / 'map-80S.mrc', 'mask': _REF_DIR / 'mask-80S.mrc',
-            'diameter_a': 300.0, 'target_apix': _DEFAULT_TARGET_APIX},
+    # Human 80S, from EMD-4263 (2.9-3.6 A, native 0.85 A/px, 640^3) via
+    # pytom_create_template.py --center --invert -b 64 to 10.0 A/px.
+    # Box scaled up from 70S's 58 px (58 * 300/280 = 62.1, rounded to 64)
+    # since the 80S ribosome is physically larger than 70S. Mask built in
+    # RELION (relion_mask_create) from the non-inverted template at a
+    # manually-picked isosurface threshold (0.00037), extend_inimask=2,
+    # width_soft_edge=4 -- not pytom_create_mask.py. See NOTES.md
+    # "Picking prep: 80S reference for pytom-ribo-auto" for the full
+    # derivation and the parameter sweep that led to these values.
+    # Mirror pair: same source (EMD-4263) run through
+    # pytom_create_template.py --center --invert --mirror -b 64, with the
+    # mirror mask built independently in RELION from the mirrored,
+    # non-inverted volume (EMD4263_80S_10.00A_mirror_noninvert.mrc) at the
+    # same threshold/extend/soft-edge as the non-mirrored mask -- verified
+    # to be an exact axis-mirror of the original mask (not just visually
+    # similar). See NOTES.md "Picking prep: 80S reference for
+    # pytom-ribo-auto" for the full derivation.
+    '80S': {'map': _REF_DIR / 'EMD4263_80S_10.00A.mrc',
+            'mask': _REF_DIR / 'EMD4263_80S_10.00A_MASK.mrc',
+            'map_mirror': _REF_DIR / 'EMD4263_80S_10.00A_mirror.mrc',
+            'mask_mirror': _REF_DIR / 'EMD4263_80S_10.00A_mirror_MASK.mrc',
+            'diameter_a': 300.0, 'target_apix': 10.0},
 }
 
 

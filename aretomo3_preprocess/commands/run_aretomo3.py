@@ -1320,11 +1320,16 @@ def _validate(args) -> tuple:
         return errors, warnings, mdoc_stats, set()
 
     # ── 1. Gain / fm-dose (only needed for cmd 0 = full pipeline) ─────────
-    if args.gain is not None:
+    if args.gain is not None and args.no_gain:
+        errors.append('--gain and --no-gain are mutually exclusive')
+    elif args.gain is not None:
         if not Path(args.gain).exists():
             errors.append(f'Gain file not found: {args.gain!r}')
-    elif args.cmd == 0:
-        errors.append('--gain is required for --cmd 0 (motion correction mode)')
+    elif args.cmd == 0 and not args.no_gain:
+        errors.append(
+            '--gain is required for --cmd 0 (motion correction mode); '
+            'pass --no-gain if these movies are already gain-corrected'
+        )
 
     if args.fm_dose is None and args.cmd == 0:
         errors.append('--fm-dose is required for --cmd 0 (motion correction mode)')
@@ -1446,7 +1451,8 @@ def _validate(args) -> tuple:
     gc = project.get('gain_check', {})
 
     if args.gain is None:
-        print('  Gain check      : skipped (no gain — cmd != 0)')
+        reason = 'already gain-corrected, --no-gain' if args.no_gain else 'cmd != 0'
+        print(f'  Gain check      : skipped (no gain — {reason})')
     elif gc:
         rec_rot  = gc.get('aretomo3_rot_gain')
         rec_flip = gc.get('aretomo3_flip_gain')
@@ -1599,8 +1605,16 @@ def add_parser(subparsers):
                      help='Output directory for AreTomo3 results (-OutDir)')
     req.add_argument('--gain', '-g', default=None,
                      help='Gain reference file (.mrc or .gain) (-Gain). '
-                          'Required for --cmd 0 (motion correction); '
-                          'not needed for --cmd 1+ (alignment/recon only).')
+                          'Required for --cmd 0 (motion correction) unless '
+                          '--no-gain is given; not needed for --cmd 1+ '
+                          '(alignment/recon only).')
+    req.add_argument('--no-gain', action='store_true', default=False,
+                     help='Movies are already gain-corrected -- skip the '
+                          '--gain-required check for --cmd 0. No -Gain flag '
+                          'is passed to AreTomo3 either way when --gain is '
+                          'omitted; this only silences the preflight error '
+                          'so the omission is confirmed intentional rather '
+                          'than an oversight. Mutually exclusive with --gain.')
     req.add_argument('--apix', '-a', type=float, default=None,
                      help='Pixel size of input movies in Å/px (-PixSize). '
                           'Required -- no auto-fill. Checked against '

@@ -12,6 +12,7 @@ dependencies = [
     "mrcfile",
     "tifffile",
     "scikit-image",
+    "tqdm",
 ]
 
 [project.scripts]

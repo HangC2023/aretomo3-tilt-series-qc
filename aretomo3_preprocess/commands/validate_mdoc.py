@@ -409,10 +409,51 @@ def _scan_fields(lines):
             'SubFramePath may be truncated)'.format(len(long_lines), _LINE_BUF - 1)
         )
 
+    # SubFramePath with no directory separator at all: AreTomo3's own
+    # CReadMdoc::mExtractFramePath() has a genuine off-by-one bug in its
+    # "strip leading whitespace" loop -- for exactly one leading space (the
+    # normal "Field = value" mdoc format), the computed start index is the
+    # space's own position, not the position after it, so the strip is a
+    # silent no-op and the extracted value keeps ONE stray leading space.
+    # This is invisible with real SerialEM mdocs because SubFramePath is a
+    # full Windows path there, and CReadMdoc::GetFrameFileName() strips
+    # everything up to the LAST backslash/slash to get the basename --
+    # discarding the stray leading space as a side effect. A bare basename
+    # (no slash at all -- e.g. a synthetic mdoc that writes just the
+    # filename, since AreTomo3 ignores SubFramePath's directory anyway) has
+    # nothing for that stripping logic to find, so GetFrameFileName() falls
+    # through to returning the whole string, leading space included, and
+    # the resulting open() call fails with ENOENT. Confirmed via strace +
+    # reading AreTomo3's C++ source directly (2026-09-09, project
+    # bi30960_6) -- this was the actual root cause of a "successfully
+    # parses, then intermittently fails to open files partway through a
+    # run, eventually crashing with CUFFT_INVALID_SIZE" failure mode that
+    # looked at first like a GPU memory or AreTomo3-version regression.
+    # Fix: any real path segment before the basename (e.g. 'src/<name>' or
+    # a fake Windows-style prefix) is enough to trigger the same stripping
+    # and produce a clean path -- a bare basename is not safe to write.
+    no_slash_paths = []
+    for line in lines:
+        raw = _extract_frame_path(line)
+        if raw is not None and '/' not in raw and '\\' not in raw:
+            no_slash_paths.append(raw)
+    if no_slash_paths:
+        issues.append(
+            '{} SubFramePath value(s) have no directory separator at all '
+            '(e.g. {!r}) -- AreTomo3\'s own leading-whitespace-stripping '
+            'bug (CReadMdoc::mExtractFramePath) only gets masked when '
+            'SubFramePath is a full path with a slash/backslash to strip '
+            'up to; a bare basename leaves a stray leading space in the '
+            'path AreTomo3 actually opens, causing ENOENT. Prefix every '
+            'SubFramePath with a real path segment (e.g. "src/<name>").'
+            .format(len(no_slash_paths), no_slash_paths[0])
+        )
+
     return dict(
         n_sections=n_zval, n_tilt=n_tilt, n_dose=n_dose, n_path=n_path,
         n_exptime=n_exptime, missing_dose_sections=missing_dose_sections,
         missing_exptime_sections=missing_exptime_sections,
+        no_slash_paths=no_slash_paths,
         issues=issues,
     )
 
@@ -936,6 +977,14 @@ def validate_file(path, fix_dose=False, fix_exptime=False, fix_order=False,
     if order_msg:
         issues.append(order_msg)
 
+    # A bare-basename SubFramePath (no slash at all) is not fixable by any
+    # --fix-* flag here -- it needs a real path segment written in front of
+    # it, which only the mdoc-building step can do safely (this validator
+    # has no way to know what fake prefix is safe/expected downstream).
+    # Always keeps success=False regardless of which other fixes succeed,
+    # same treatment as a missing referenced movie file (--check-frames).
+    subframepath_ok = not scan['no_slash_paths']
+
     frame_check = check_frames_found(path, lines) if check_frames else None
     frames_ok = True
     if frame_check and frame_check['missing']:
@@ -973,13 +1022,19 @@ def validate_file(path, fix_dose=False, fix_exptime=False, fix_order=False,
         # regardless of how clean the mdoc's own fields are. Same for a
         # section-count disagreement with the mdocfile-based parser that
         # actually populates project.json.
-        success=(failure is None and not order_issues and frames_ok and mdocfile_ok),
+        # subframepath_ok added: a bare-basename SubFramePath (no slash at
+        # all) leaves a stray leading space in the path AreTomo3 actually
+        # opens (see _scan_fields) -- a guaranteed open() failure the
+        # simulation's presence-only check for SubFramePath can't detect.
+        success=(failure is None and not order_issues and frames_ok
+                 and mdocfile_ok and subframepath_ok),
         n_tilts=n_tilts,
         failure=failure,
         issues=issues,
         order_issues=order_issues,
         missing_dose_sections=scan['missing_dose_sections'],
         missing_exptime_sections=scan['missing_exptime_sections'],
+        no_slash_paths=scan['no_slash_paths'],
         n_sections=scan['n_sections'],
         fixed=False,
         fix_types=[],
@@ -1134,7 +1189,9 @@ def validate_file(path, fix_dose=False, fix_exptime=False, fix_order=False,
         result['issues'].append(
             'Fix applied, but mdocfile library still parses {} sections vs '
             '{} tilts recovered by the simulation.'.format(n_mdocfile_after, n_after))
-    result['success'] = frames_ok and mdocfile_ok_after
+    # None of the fixes above (reorder/dose/exptime) touch SubFramePath,
+    # so subframepath_ok (computed against the original lines) still holds.
+    result['success'] = frames_ok and mdocfile_ok_after and subframepath_ok
     result['n_tilts'] = n_after
     result['failure'] = None
     result['order_issues'] = []
@@ -1238,6 +1295,7 @@ def run(args):
     any_fix = fix_order or fix_dose or fix_exptime or fix_subframes
     n_pass = n_fail = n_fixed = 0
     n_fail_dose = n_fail_exptime = n_fail_order = n_fail_short = n_fail_frames = 0
+    n_fail_no_slash = 0
     col_w = max(len(Path(p).name) for p in paths)
 
     print()
@@ -1276,6 +1334,8 @@ def run(args):
                 n_fail_order += 1
             if r.get('n_frames_found') is not None and r['n_frames_found'] < r['n_frames_expected']:
                 n_fail_frames += 1
+            if r.get('no_slash_paths'):
+                n_fail_no_slash += 1
 
         note_parts = []
         if r['failure'] and not r['fixed']:
@@ -1343,6 +1403,12 @@ def run(args):
             if n_fail_frames:
                 print('  {:3d} referenced movie file(s) not found next to the mdoc '
                       '(see └─ lines above)'.format(n_fail_frames))
+            if n_fail_no_slash:
+                print('  {:3d} SubFramePath with no directory separator -- AreTomo3\'s '
+                      'own leading-space bug is only masked when SubFramePath is a '
+                      'full path (see └─ lines above); prefix with a real path '
+                      'segment, e.g. "src/<name>", when building the mdoc'
+                      .format(n_fail_no_slash))
     print()
 
     # ── Save mdoc metadata to project.json for all passing files ──────────────
