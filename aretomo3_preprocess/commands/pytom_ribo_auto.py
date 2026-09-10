@@ -552,7 +552,7 @@ def _build_pm_namespace(**overrides):
     return argparse.Namespace(**ns_dict)
 
 
-def _matching_defaults():
+def _matching_defaults(volume_split=None):
     """
     Fixed pytom_match_template.py flags proven on this system's real
     production ribosome runs -- see external_pytom2.py on the
@@ -567,13 +567,20 @@ def _matching_defaults():
     just repeats the full angular search once per sub-volume for no
     benefit. BUT this is resolution-dependent: the '8b0x' entry (7.5 A/px,
     ~2.4x the voxel count) is projected at ~28 GB unsplit -- would NOT fit
-    on this card. volume_split isn't yet a per-particle registry field
-    (like target_apix is), so if/when 8b0x is actually used for a real
-    run, this needs revisiting before assuming [1,1,1] is safe there too.
+    on this card.
+
+    Confirmed on the '80S' registry entry (10.0 A/px, 1092x1537x416 box --
+    bi30960_6, 2026-09-10): [1,1,1] OOMs unsplit on BOTH an 8 GB GTX 1080
+    (failed needing >=9.36 GB, still climbing) and a 16 GB A4000 (failed
+    needing >=18.7 GB, still climbing) -- 18/18 job attempts failed, 0
+    succeeded. This is what --volume-split (below) exists to fix; pass it
+    explicitly for any particle/GPU combo where [1,1,1] hasn't already
+    been proven stable (only '70S' on a 16 GB card has been).
     """
     return dict(
         angular_search='10', non_spherical_mask=True, z_axis_rotational_symmetry=1,
-        volume_split=[1, 1, 1], search_x=None, search_y=None, search_z=None,
+        volume_split=list(volume_split) if volume_split else [1, 1, 1],
+        search_x=None, search_y=None, search_z=None,
         tomogram_ctf_model='phase-flip', random_phase_correction=True,
         rng_seed=69, half_precision=True, per_tilt_weighting=True,
         low_pass=10.0, high_pass=400.0, spectral_whitening=False,
@@ -716,7 +723,7 @@ def _check_handedness(args, in_dir, out_dir, reg, diameter_a, gpus, sep):
             input=str(in_dir), vol_suffix=vol_suffix, include=[ts_name],
             template=str(template_path), mask=str(mask_path),
             voxel_size=actual_apix, gpu=[gpu], particle_diameter=diameter_a,
-            **_matching_defaults(),
+            **_matching_defaults(volume_split=args.volume_split),
             extract=True, n_particles=args.handedness_particles,
             tophat_filter=True,
             relion5_compat=True,
@@ -970,6 +977,15 @@ def add_parser(subparsers):
     # hardware -- pass this explicitly unless that's really what you want.
     ctl.add_argument('--gpu', '-g', nargs='+', type=int, default=None,
                      help='GPU ID(s) to use (default: auto-detect, ALL visible GPUs)')
+    # Default [1,1,1] (no split) is only proven stable for '70S' on a 16 GB
+    # card -- see _matching_defaults(). Pass this explicitly for any other
+    # particle/GPU combo, especially a box this large as '80S' (1092x1537x416
+    # at 10.0 A/px OOMs unsplit on both an 8 GB 1080 and a 16 GB A4000).
+    ctl.add_argument('--volume-split', nargs=3, type=int, default=None,
+                     metavar=('X', 'Y', 'Z'),
+                     help='Split the search volume into X*Y*Z pieces to fit GPU '
+                          'memory (default: [1,1,1], no split -- only proven safe '
+                          'for the 70S entry on a 16 GB card)')
     ctl.add_argument('--clean', action='store_true',
                      help='Remove an existing --output directory before starting')
     ctl.add_argument('--pytom-dir', default=None,
@@ -1138,7 +1154,7 @@ def run(args):
         # template matching
         template=str(template_path), mask=str(mask_path),
         voxel_size=actual_apix, gpu=gpus, particle_diameter=diameter_a,
-        **_matching_defaults(),
+        **_matching_defaults(volume_split=args.volume_split),
         # QC report
         analyse=True,
         # extraction
