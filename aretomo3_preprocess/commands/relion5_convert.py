@@ -568,6 +568,41 @@ def add_parser(subparsers):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run(args):
+    # TODO: --output currently produces a flat directory (tilt_series_aligned.star,
+    # tilt_series/, tilts/ directly inside it) that a RELION5 GUI project doesn't
+    # recognise as a job at all -- it's just untracked files. Worked out on
+    # bi30960_6 (2026-09-14, sean + Claude) what a properly-integrated result
+    # needs, by reverse-engineering an existing real RELION5 tomography project's
+    # own job directories rather than guessing:
+    #   - output into <project>/External/jobNNN/ (relion.external job type --
+    #     NOT relion.aligntiltseries, since the actual alignment was done by
+    #     AreTomo3, not RELION's own relion_align_tiltseries; relion.external is
+    #     RELION's own sanctioned mechanism for exactly this "external tool
+    #     output integrated into the pipeline" situation)
+    #   - note.txt: "++++ Executing new job on <date> ++++ with the following
+    #     command(s): <the actual relion5-convert invocation> ++++"
+    #   - run.out / run.err: this command's actual captured stdout/stderr
+    #   - RELION_JOB_EXIT_SUCCESS: empty marker file
+    #   - job.star: relion.external schema (fn_exe/param1_label.../param10_value
+    #     key-value pairs -- see pipeline_jobs.cpp's initialiseExternalJob())
+    #   - job_pipeline.star (per-job) and the project-root default_pipeline.star
+    #     both need data_pipeline_{processes,nodes,output_edges,input_edges}
+    #     tables -- Node type for the output tilt_series_aligned.star is the
+    #     plain "TomogramGroupMetadata.star.relion" (matching how an external/
+    #     untracked tomogram star is labelled in real projects), not a
+    #     .relion.tomo.* suffixed variant (those are reserved for genuine
+    #     native-job outputs).
+    # Confirmed real by having actual relion_pipeliner (--check_job_completion)
+    # read and re-serialise a hand-written default_pipeline.star built this way
+    # with no errors. Should be automated into this command (write these files
+    # itself when --output looks like <project>/External/jobNNN/, or add a new
+    # --relion-project flag that does the job-numbering itself via
+    # `relion_pipeliner --addJob`) rather than left as a manual, per-project
+    # step. See also the matching TODO in pytom_ribo_auto.py / wherever the
+    # natural next step (importing the picked particles as the following
+    # Import/job<N+1>/ via relion_tomo_import_coordinates --do_coords) should
+    # eventually be chained in automatically once this one is fixed.
+
     # ── dependency checks ─────────────────────────────────────────────────────
     missing = []
     if not _HAS_STARFILE:

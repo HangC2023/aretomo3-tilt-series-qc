@@ -1187,6 +1187,17 @@ def run(args):
         print(f'  Match QC (browser)   : {match_qc}')
     if extract_qc.exists():
         print(f'  Picks QC (browser)   : {extract_qc}')
+    # TODO: once relion5_convert.py's own TODO (proper External/jobNNN/
+    # pipeline-integrated output) is done, this is the natural next step to
+    # chain automatically: these *_particles.star files are already exactly
+    # what `relion_tomo_import_coordinates --i "{out_dir}/*/*_particles.star"
+    # --o Import/job<N+1>/ --centered --scale_factor 1 --add_factor 0` expects
+    # (confirmed on bi30960_6, 2026-09-14 -- each file's own rlnTomoName is
+    # used directly since these are already proper RELION5-compatible STAR
+    # files, no --remove_substring needed). Could offer a --relion-import flag
+    # here that runs it (and writes the matching job.star/note.txt/pipeline
+    # registration) right after extraction finishes, picking up job numbering
+    # from wherever relion5_convert.py's own backfilled job left off.
 
     update_section(
         section='pytom_ribo_auto',
