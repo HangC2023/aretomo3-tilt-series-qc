@@ -331,7 +331,9 @@ def slab_with_picks_b64(
     scores_shown = df[score_col][in_slab].values if score_col is not None else None
 
     # ── Plot ─────────────────────────────────────────────────────────────────
-    from matplotlib import cm as _cm
+    # matplotlib.cm.get_cmap() was removed in matplotlib >=3.9 (fully gone by
+    # 3.11.1) -- matplotlib.colormaps[name] is the current replacement.
+    import matplotlib as _mpl
     from matplotlib.colors import Normalize as _Normalize
     from matplotlib.colorbar import ColorbarBase as _ColorbarBase
 
@@ -357,7 +359,7 @@ def slab_with_picks_b64(
             s_lo, s_hi = float(scores_shown.min()), float(scores_shown.max())
             if s_lo == s_hi:
                 s_hi = s_lo + 1e-6
-            cmap_picks = _cm.get_cmap('plasma')
+            cmap_picks = _mpl.colormaps['plasma']
             norm_picks = _Normalize(vmin=s_lo, vmax=s_hi)
             colors = [cmap_picks(norm_picks(s)) for s in scores_shown]
         else:
@@ -383,7 +385,7 @@ def slab_with_picks_b64(
     # Colorbar
     if has_scores:
         cax = fig.add_axes([img_right + 0.01, 0.1, 0.025, 0.8])
-        cb  = _ColorbarBase(cax, cmap=_cm.get_cmap('plasma'),
+        cb  = _ColorbarBase(cax, cmap=_mpl.colormaps['plasma'],
                             norm=_Normalize(vmin=float(scores_shown.min()),
                                             vmax=float(scores_shown.max())),
                             orientation='vertical')
