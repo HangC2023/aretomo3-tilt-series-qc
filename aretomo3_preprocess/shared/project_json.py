@@ -140,6 +140,22 @@ def load_or_create(path: Path = None) -> dict:
     data  = _read(path)
 
     if not data:
+        # TODO (found 2026-09-14, bi30960_6): this branch protects against
+        # reusing an EXISTING project.json from the wrong cwd (see the
+        # working_dir mismatch check a few lines below), but has no
+        # protection against silently CREATING a new, disconnected one in a
+        # subdirectory that just happens to have none yet -- even when a
+        # real project.json already exists a few levels up. Hit this for
+        # real running `pytom-match --analyse-only` from
+        # pytom-80S/cutoff_investigation/ (a subdirectory of a real
+        # project): it silently created a second, orphaned project.json
+        # right there instead of finding/using the real one, so
+        # record_analysis_run()/write_landing_page() updated the wrong
+        # state and analysis_start.html at the real project root never
+        # reflected the new reports. Should at least walk up parent
+        # directories looking for an existing aretomo3_project.json before
+        # deciding this is genuinely a fresh project and creating one, or
+        # warn loudly if one is found nearby but not exactly at cwd.
         # First run — initialise
         data = {
             'project': {
