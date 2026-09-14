@@ -282,6 +282,14 @@ def _process_ts(ts_name: str, input_dir: Path, cmd0_dir: Path, imod_dir: Path,
     xf_path    = imod_dir   / f'{ts_name}_Imod' / f'{ts_name}_st.xf'
     itlt_path  = imod_dir   / f'{ts_name}_Imod' / f'{ts_name}_st.tlt'
     mrc_path   = input_dir  / f'{ts_name}.mrc'
+    # TODO: not existence-checked below like the other files are -- if
+    # input_dir is a cmd=2 (reconstruction-only) dir, this never exists
+    # (cmd=2 doesn't rerun CTF estimation, only cmd=0/cmd=1 produce the
+    # .mrc power-spectrum stack) and rlnCtfImage ends up pointing at a
+    # dangling path with no warning. Should validate existence here (and
+    # ideally fall back to cmd0_dir) once run_aretomo3.py's cmd=2 staging
+    # also copies this file in -- see the matching TODO there. Found
+    # 2026-09-14 on bi30960_6.
     ctf_mrc    = input_dir  / f'{ts_name}_CTF.mrc'
 
     for path, label in [

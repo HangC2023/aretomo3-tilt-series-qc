@@ -550,6 +550,22 @@ def _setup_staging(out_dir: Path, src_in_dir: Path, cmd: int,
             if ctf_src.exists() and not ctf_dst.exists() and not ctf_dst.is_symlink():
                 to_link_ctf.append((ts_name, ctf_src.resolve()))
 
+        # TODO: also stage ts-xxx_CTF.mrc (the diagnostic per-tilt CTF
+        # power-spectrum stack) here alongside _CTF.txt, the same way --
+        # cmd=2 only produces/copies the numeric _CTF.txt, never the .mrc,
+        # since it doesn't rerun CTF estimation. This means relion5-convert
+        # (relion5_convert.py's `ctf_mrc = input_dir / f'{ts_name}_CTF.mrc'`)
+        # writes a dangling rlnCtfImage reference whenever --input is a
+        # cmd=2 dir, since that file only ever exists in the cmd=0/cmd=1 dir
+        # that actually ran CTF estimation. relion5_convert.py should also
+        # be updated to validate ctf_mrc.exists() (like it already does for
+        # .aln/_CTF.txt/_TLT.txt/_Imod files) instead of writing the path
+        # unconditionally. Found 2026-09-14 on bi30960_6 (sean + Claude);
+        # not fixed since it wasn't needed for that project's immediate use
+        # (relion5-convert was pointed at cmd=1 instead, or run without a
+        # working CTF image, since it's not critical for what was needed
+        # right away).
+
     to_link_mrc = []
     for ts_name, src in mrc_sources.items():
         mrc_dst = staging_dir / f'{ts_name}.mrc'
