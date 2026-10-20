@@ -125,53 +125,6 @@ def _build_prior_dose_map(tlt_data: dict) -> dict:
     return prior  # acq_order → dose before this tilt
 
 
-def _parse_xf_file(xf_path: Path, pixel_size: float) -> list:
-    """
-    Parse IMOD _st.xf transformation file.
-
-    Returns a list (one entry per tilt, 0-indexed, tilt-sorted) of dicts:
-      {'z_rot', 'x_shift_angst', 'y_shift_angst', 'x_tilt'}
-    """
-    results = []
-    with open(xf_path) as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            vals = [float(v) for v in line.split()]
-            if len(vals) != 6:
-                continue
-            A11, A12, A21, A22, DX, DY = vals
-            z_rot = math.degrees(math.atan2(A12, A11))
-            T = np.array([[A11, A12, DX],
-                          [A21, A22, DY],
-                          [0.0, 0.0, 1.0]])
-            T_inv = np.linalg.inv(T)
-            x_shift_angst = T_inv[0, 2] * pixel_size
-            y_shift_angst = T_inv[1, 2] * pixel_size
-            results.append({
-                'z_rot':         z_rot,
-                'x_shift_angst': x_shift_angst,
-                'y_shift_angst': y_shift_angst,
-                'x_tilt':        0.0,
-            })
-    return results
-
-
-def _parse_imod_tlt(tlt_path: Path) -> list:
-    """
-    Parse IMOD _st.tlt refined tilt angles.
-    Returns a list of floats (0-indexed, tilt-sorted order).
-    """
-    tilts = []
-    with open(tlt_path) as fh:
-        for line in fh:
-            line = line.strip()
-            if line:
-                tilts.append(float(line))
-    return tilts
-
-
 def _load_mdoc_from_project(project: dict, ts_name: str) -> tuple:
     """
     Extract per-frame mdoc data for ts_name from aretomo3_project.json.
@@ -320,7 +273,7 @@ def _unstack_mrc(src: Path, out_dir: Path, index_to_stem: dict,
 # Per-tomogram processing
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _process_ts(ts_name: str, input_dir: Path, cmd0_dir: Path, imod_dir: Path,
+def _process_ts(ts_name: str, input_dir: Path, cmd0_dir: Path,
                 output_dir: Path, session: dict,
                 movie_frames: int, mtf: str, optics_group: str,
                 no_unstack: bool, unstack_halves: bool, dry_run: bool,
@@ -331,9 +284,28 @@ def _process_ts(ts_name: str, input_dir: Path, cmd0_dir: Path, imod_dir: Path,
     Process one tilt series.  Returns a dict of global-star fields, or None on
     fatal error.
 
-    imod_dir    : directory containing ts-XXX_Imod/ subdirectories (_st.xf, _st.tlt).
-                  For cmd=0/1 input this is the same as input_dir; for cmd=2 it is
-                  the cmd=0/1 dir (auto-detected or specified via --imod-dir).
+    Per-tilt rotation/shift/tilt-angle (rlnTomoZRot/XShiftAngst/YShiftAngst/
+    YTilt) are read directly from the .aln file's own per-frame 'frames' list
+    (parse_aln_file), keyed by SEC -- NOT from a separate IMOD _st.xf/_st.tlt
+    file. Verified empirically (bi30960_6, 2026-10-20, sean + Claude) against
+    this project's own cmd1 IMOD files: aln ROT matches the xf-derived z_rot
+    to within 0.01 deg (atan2-roundoff noise, not a real difference); aln
+    TX/TY * pixel_size matches xf-derived x/y_shift_angst exactly (same sign,
+    no inversion/swap); aln TILT matches IMOD _st.tlt exactly, INCLUDING
+    -TiltCor's alpha_offset baked in. So .aln already has everything, in the
+    exact form AreTomo3 itself used for reconstruction/picking -- and unlike
+    a separate _Imod dir, .aln is always staged alongside input_dir by
+    construction (cmd=2 copies it directly), so there's no cmd0-vs-cmd1
+    directory-selection question to get wrong.
+
+    This replaces an earlier approach that read _st.xf/_st.tlt from a
+    separate --imod-dir (defaulting to --cmd0-dir). That default silently
+    picked a TiltCor-OFF directory (cmd0) whenever the actual alignment in
+    use (--input) was a TiltCor-ON run (cmd1/cmd2), dropping the tilt
+    correction from rlnTomoYTilt with no warning -- found on bi30960_6's own
+    job001 (a real -10 deg offset silently lost). Sourcing straight from
+    .aln removes that failure mode entirely.
+
     mdoc data is sourced from project.json when available; mdoc_dir is only
     used as a fallback if project.json is missing or the TS is not in it.
     """
@@ -341,8 +313,6 @@ def _process_ts(ts_name: str, input_dir: Path, cmd0_dir: Path, imod_dir: Path,
     aln_path   = input_dir  / f'{ts_name}.aln'
     ctf_path   = input_dir  / f'{ts_name}_CTF.txt'
     tlt_path   = cmd0_dir   / f'{ts_name}_TLT.txt'
-    xf_path    = imod_dir   / f'{ts_name}_Imod' / f'{ts_name}_st.xf'
-    itlt_path  = imod_dir   / f'{ts_name}_Imod' / f'{ts_name}_st.tlt'
     mrc_path   = input_dir  / f'{ts_name}.mrc'
     # TODO: not existence-checked below like the other files are -- if
     # input_dir is a cmd=2 (reconstruction-only) dir, this never exists
@@ -358,8 +328,6 @@ def _process_ts(ts_name: str, input_dir: Path, cmd0_dir: Path, imod_dir: Path,
         (aln_path,  '.aln'),
         (ctf_path,  '_CTF.txt'),
         (tlt_path,  '_TLT.txt'),
-        (xf_path,   '_Imod/_st.xf'),
-        (itlt_path, '_Imod/_st.tlt'),
     ]:
         if not path.exists():
             print(f'  ERROR: {ts_name}: {label} not found at {path}')
@@ -390,27 +358,27 @@ def _process_ts(ts_name: str, input_dir: Path, cmd0_dir: Path, imod_dir: Path,
     ctf_data  = parse_ctf_file(ctf_path)
     tlt_data  = parse_tlt_file(tlt_path)
     pix_size  = session.get('parameters', {}).get('PixSize', 1.0)
-    xf_list   = _parse_xf_file(xf_path, pix_size)
-    itlt_list = _parse_imod_tlt(itlt_path)
+
+    # SEC -> frame dict ({rot, tx, ty, tilt, ...}); _TLT.txt row N == SEC N
+    # (tilt-sorted, including dark frames -- see parse_tlt_file's docstring),
+    # so tlt_row_idx below can be used directly as the SEC key. Dark-frame
+    # SECs have no entry here (parse_aln_file's 'frames' list excludes them).
+    frames_by_sec = {f['sec']: f for f in aln_data['frames']}
 
     if not tlt_data:
         print(f'  ERROR: {ts_name}: no rows in _TLT.txt')
         return None
 
     # alpha_offset: systematic tilt correction, either -TiltCor's automatic
-    # per-TS estimate or set by hand via aln-edit. Confirmed dataset-wide
-    # (see CLAUDE.md's alpha_offset convention section) that when TiltCor is
-    # on, AreTomo3 bakes this correction directly into BOTH the .aln TILT
-    # column and the IMOD _st.tlt file it derives from it -- itlt_list below
-    # (IMOD's own, preferred per this codebase's "prefer IMOD-format files"
-    # design principle) is therefore already specimen-referenced and must
-    # NOT have alpha_offset added again. Only the fallback path -- AreTomo3's
-    # own _TLT.txt nominal_tilt, always raw regardless of TiltCor, used only
-    # if itlt_list is unexpectedly short -- still needs it added explicitly.
+    # per-TS estimate or set by hand via aln-edit. Already baked into every
+    # frame's 'tilt' value in aln_data['frames'] (verified identical to IMOD
+    # _st.tlt, which is the file that used to be the source for this). Only
+    # the fallback path below -- used if a SEC is somehow missing from
+    # aln_data['frames'] -- needs it added explicitly.
     alpha_offset = aln_data.get('alpha_offset') or 0.0
     if alpha_offset != 0.0:
         print(f'  alpha_offset = {alpha_offset:+.2f}° (from .aln) -- already baked into '
-              f'IMOD _st.tlt, only added to the _TLT.txt fallback path if used')
+              f"each frame's own TILT value")
 
     # Warn if .aln was manually edited (backup exists)
     if (aln_path.parent / f'{aln_path.name}.bak').exists():
@@ -449,12 +417,11 @@ def _process_ts(ts_name: str, input_dir: Path, cmd0_dir: Path, imod_dir: Path,
             movie_path = Path('FileNotFound')
             stem       = f'{ts_name}_{tlt_row_idx - 1:03d}'
 
-        ctf_entry = ctf_data.get(tlt_row_idx, {})
-        xf_idx    = tlt_row_idx - 1
-        xf_entry  = xf_list[xf_idx] if xf_idx < len(xf_list) else {}
-        y_tilt    = (itlt_list[xf_idx] if xf_idx < len(itlt_list)
-                     else tlt_entry['nominal_tilt'] + alpha_offset)
-        pre_exp   = prior_dose_map.get(acq_order, 0.0)
+        ctf_entry  = ctf_data.get(tlt_row_idx, {})
+        stack_idx  = tlt_row_idx - 1  # 0-indexed stack-frame position, not an .aln/xf lookup key
+        frame      = frames_by_sec.get(tlt_row_idx)  # tlt_row_idx == SEC
+        y_tilt     = frame['tilt'] if frame else tlt_entry['nominal_tilt'] + alpha_offset
+        pre_exp    = prior_dose_map.get(acq_order, 0.0)
 
         tilts_dir = output_dir / 'tilts'
         mrc_out   = tilts_dir / f'{stem}.mrc'
@@ -462,7 +429,7 @@ def _process_ts(ts_name: str, input_dir: Path, cmd0_dir: Path, imod_dir: Path,
         odd_out   = tilts_dir / f'{stem}_ODD.mrc'
 
         if not is_dark:
-            index_to_stem[xf_idx] = stem
+            index_to_stem[stack_idx] = stem
 
         nominal_tilt = tlt_entry['nominal_tilt']
 
@@ -494,11 +461,11 @@ def _process_ts(ts_name: str, input_dir: Path, cmd0_dir: Path, imod_dir: Path,
             'rlnCtfFigureOfMerit':          ctf_entry.get('cc', 0.0),
             'rlnCtfMaxResolution':          ctf_entry.get('fit_spacing_A', 0.0),
             'rlnCtfIceRingDensity':         0.0,
-            'rlnTomoXTilt':                 xf_entry.get('x_tilt', 0.0),
+            'rlnTomoXTilt':                 0.0,  # beam-tilt component; AreTomo3 doesn't report one
             'rlnTomoYTilt':                 y_tilt,
-            'rlnTomoZRot':                  xf_entry.get('z_rot', 0.0),
-            'rlnTomoXShiftAngst':           xf_entry.get('x_shift_angst', 0.0),
-            'rlnTomoYShiftAngst':           xf_entry.get('y_shift_angst', 0.0),
+            'rlnTomoZRot':                  frame['rot'] if frame else 0.0,
+            'rlnTomoXShiftAngst':           frame['tx'] * pix_size if frame else 0.0,
+            'rlnTomoYShiftAngst':           frame['ty'] * pix_size if frame else 0.0,
             'rlnCtfScalefactor':            math.cos(math.radians(y_tilt)),
             'rlnIncluded':                  not is_dark,
         })
@@ -590,7 +557,7 @@ def _process_ts(ts_name: str, input_dir: Path, cmd0_dir: Path, imod_dir: Path,
         'rlnMtfFileName':                 mtf,
         'rlnOpticsGroupName':             optics_group,
         'rlnTomoTiltSeriesPixelSize':     pix_size,
-        'rlnTomoZRot':                    xf_list[0]['z_rot'] if xf_list else 0.0,
+        'rlnTomoZRot':                    aln_data['frames'][0]['rot'] if aln_data['frames'] else 0.0,
         'rlnTomoTomogramThickness':       thickness_nm,
         **vol_geom,
     }
@@ -612,12 +579,6 @@ def add_parser(subparsers):
     p.add_argument('--cmd0-dir', default=None, metavar='DIR',
                    help='cmd=0 directory containing _TLT.txt and Session.json.  '
                         'Auto-detected from .mrc symlinks if not given.')
-    p.add_argument('--imod-dir', default=None, metavar='DIR',
-                   help='Directory containing ts-XXX_Imod/ subdirectories '
-                        '(_st.xf, _st.tlt alignment files).  '
-                        'Defaults to --cmd0-dir (auto-detected).  '
-                        'Set explicitly when alignment was done in a separate '
-                        'cmd=1 directory.')
     p.add_argument('--mdoc-dir', default=None, metavar='DIR',
                    help='Fallback directory containing ts-XXX.mdoc files.  '
                         'Not needed when aretomo3_project.json is present '
@@ -783,10 +744,6 @@ def run(args):
     if cmd0_dir != input_dir:
         print(f'cmd0 directory: {cmd0_dir}')
 
-    imod_dir = Path(args.imod_dir).resolve() if args.imod_dir else cmd0_dir
-    if imod_dir != cmd0_dir:
-        print(f'_Imod directory: {imod_dir}')
-
     # ── load project JSON ─────────────────────────────────────────────────────
     from aretomo3_preprocess.shared.project_json import load as _load_project
     project = _load_project()
@@ -867,7 +824,6 @@ def run(args):
             ts_name        = ts_name,
             input_dir      = input_dir,
             cmd0_dir       = cmd0_dir,
-            imod_dir       = imod_dir,
             output_dir     = output_dir,
             session        = session,
             movie_frames   = args.movie_frames,
